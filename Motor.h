@@ -3,7 +3,7 @@
 #include<Arduino.h>
 
 #define max_control_speed 180
-#define base_control_speed 150
+#define base_control_speed 160
 #define min_control_speed 30
 
 

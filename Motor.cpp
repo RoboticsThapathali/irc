@@ -75,12 +75,12 @@ void Motor::updatePWM(int pid_control_val){
 
     if(l_pwm> max_control_speed)
       l_pwm = max_control_speed;
-    else if(l_pwm < 110)
+    else if(l_pwm < 130)
       l_pwm = 0;
 
     if(r_pwm> max_control_speed)
       r_pwm = max_control_speed;
-    else if(r_pwm < 110)
+    else if(r_pwm < 130)
       r_pwm = 0;
 
     analogWrite(PWM_L, l_pwm);

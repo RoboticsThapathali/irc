@@ -49,18 +49,18 @@ typedef enum {
 #define WEIGHT 1
 #define END_NODE 8
 
+#define CAL_SPEED 80
+
 
 #define TONE_PIN 11
-#define BOX_PIN 30
-#define QR_BOX_PIN 31
-#define QR_BOX_READ 32
+#define BOX_PIN 36
+#define QR_BOX_PIN 37
+#define QR_BOX_READ 38
 
 #define QR_BOX_DIST 1800
 
 
 struct configuration{
-  int left_sensor_dist = 0;
-  int right_sensor_dist = 0;
   int checkpoints = 0;
   int box_coordinates[5] = {-1};
   bool dry_run = true;
@@ -72,7 +72,6 @@ struct configuration{
 Direction bot_dir = NORTH;
 
 PID *pid;
-NewPing *sonar1;
 
 NewPing *sonar[3];
 
@@ -116,6 +115,8 @@ bool box_present = false;
 bool box_present_left = false;
 bool box_present_right = false;
 bool is_maze_completed = false;
+bool save_check_point = false;
+
 void setupSensor();
 void setupPID();
 
@@ -124,6 +125,8 @@ void updateSensorData();
 void control();
 void initialize_map();
 void initialize_nodes();
+
+void sound();
 
 int findPreviousMove(int,int);
 void checkDistance();
@@ -151,9 +154,13 @@ void setup() {
 
   servo.attach(8);
 
+  servo.write(90);
+
 //  EEPROM_writeAnything(0,config);
 
   EEPROM_readAnything(0,config);
+
+  
   pinMode(5, INPUT_PULLUP);
   pinMode(BOX_PIN, INPUT);
   pinMode(QR_BOX_PIN, INPUT);
@@ -167,15 +174,15 @@ void setup() {
 
 
   if(!config.dry_run){
-    
     for(int i = 0; i < 89; i++){
       nodes[i] = &config.mNodes[i];
     }
 
     //define maze if not dry run;
     solveMaze(config.checkpoints);
-       
   }
+
+  
 
   motor = new Motor();
 
@@ -183,23 +190,22 @@ void setup() {
     sonar[i] = new NewPing(TRIG_PIN + i, ECHO_PIN + i, 100);
   }
 
-  sonar1 = new NewPing(6,7, 100);
   
   updateSensorData();  
   updateSensorData();  
 
+  sound();
+
+ 
+  
   while(digitalRead(5));
 }
 
 void seeData(){
    updateSensorData();
-//   Serial.println(sensor[1]->ping() / 57);
    Serial.println(sensor_values[0]);
    Serial.println(sensor_values[1]);
    Serial.println(sensor_values[2]);
-//
-//   Serial.println(sonar1->ping_cm());
-
    
    delay(200);
 }
@@ -217,33 +223,44 @@ void loop(){
  updateSensorData();
 
  if(motor->getState() == MotorState::FORWARD){ 
-   control();
+
+     if(next_node != 43 || present_node != 43)
+        control();
+     else
+        motor->moveForward();
   }
 
 
  if(motor->getState() == MotorState::FORCE_STOP){
 
-//    if(!wall[0] || !wall[2] || wall[1]){
-      motor->stopMovingForward();
-      motor->setState(NULL_STATE);
-      delay(200);
-      checkDistance();
-      motor->setState(NULL_STATE);
-      delay(200);    
-//    }else{
-      motor->setState(NULL_STATE);
+
+  
+
+  //    if(!wall[0] || !wall[2] || wall[1]){
+        motor->stopMovingForward();
+        motor->setState(NULL_STATE);
+        delay(200);
+        checkDistance();
+        
+        motor->setState(NULL_STATE);
+        delay(200);    
+  //    }else{
+        motor->setState(NULL_STATE);
 //    }
+
  }
 
 
 
  if(motor->getState() != MotorState::NULL_STATE) return;
 
+   if(wall[1]){
+     
+       box_present = digitalRead(BOX_PIN);
+       qr_present = digitalRead(QR_BOX_PIN);
+    
+     }
 
- if(wall[1]){
-   box_present = digitalRead(BOX_PIN);
-   qr_present = digitalRead(QR_BOX_PIN);
- }
  
  updateSensorData(); 
 
@@ -255,12 +272,14 @@ void loop(){
 
  present_node = bot_x_pos + bot_y_pos * 10;
 
+
   if(config.dry_run){
     if(is_first_maze_completed){
       int *path = findShortestPath(present_node, 43); 
       configureMazePath(path);
       first_maze_completion = true;
       is_first_maze_completed = false;
+      return;
     } 
   }
 
@@ -273,22 +292,11 @@ void loop(){
   }
 
 
-  if(first_maze_completion && present_node == 43){
-        box_present = true;
-        qr_present = true;
-      if(bot_x_pos+RelPosX(LeftOf(bot_dir)) == 4 && bot_y_pos+RelPosY(LeftOf(bot_dir)) == 4){
-        next_move = 0;
-      }else if(bot_x_pos+RelPosX(bot_dir) == 4 && bot_y_pos+RelPosY(bot_dir) == 4){
-        next_move = 1;
-      }else if(bot_x_pos+RelPosX(RightOf(bot_dir)) == 4 && bot_y_pos+RelPosY(RightOf(bot_dir)) == 4){
-        next_move = 2;
-      }
-  }
+
+  if(!first_maze_completion){
+
 
   if (!wall[0] || box_present_left || !config.dry_run) {
-
-    box_present_left = false;
-    
     rel_x = bot_x_pos+RelPosX(LeftOf(bot_dir));
     rel_y = bot_y_pos+RelPosY(LeftOf(bot_dir));
 
@@ -301,7 +309,6 @@ void loop(){
     } else if (maze[rel_x][rel_y]!=1 ){
       next_move = 0;
       decreaseMaze(maze[bot_x_pos][bot_y_pos]); 
-      
     }else{
       decreaseMaze(maze[bot_x_pos][bot_y_pos]);
 
@@ -309,9 +316,37 @@ void loop(){
   }
 
 
-  if (!wall[1] || !config.dry_run || box_present) {  
+  if (!wall[1] || !config.dry_run || box_present ) {  
     rel_x = bot_x_pos+RelPosX(bot_dir);
     rel_y = bot_y_pos+RelPosY(bot_dir);
+
+    if(config.dry_run)
+          
+      if(wall[1] && box_present && present_node != 43){
+  
+          sound();
+          if(qr_present){
+            while(qr_present){
+              digitalWrite(QR_BOX_READ, HIGH);
+              changeDistanceForQr();
+              qr_present = digitalRead(QR_BOX_PIN);
+              digitalWrite(QR_BOX_READ, LOW);
+              motor->setState(NULL_STATE);
+            }
+          }
+        
+          while(box_present){
+            updateSensorData();
+            box_present = wall[1];
+          }
+  
+         if(config.dry_run){
+            save_check_point = false;
+            config.box_coordinates[checkpoint++] = rel_x + rel_y * 10;
+            EEPROM_writeAnything(0,config);
+          }
+          
+      }
     
     updateChildNodes(present_node, rel_x + rel_y * 10, bot_dir);
 
@@ -326,13 +361,9 @@ void loop(){
     
   }
     
-  if (!wall[2] || box_present_right || !config.dry_run) {
-
-    box_present_right = false;
-    
+  if (!wall[2] || box_present_right || !config.dry_run) {    
     rel_x = bot_x_pos+RelPosX(RightOf(bot_dir));
     rel_y = bot_y_pos+RelPosY(RightOf(bot_dir));
-    
     updateChildNodes(present_node, rel_x + rel_y * 10, RightOf(bot_dir));
 
     if(maze[rel_x][rel_y]==0)
@@ -346,10 +377,162 @@ void loop(){
     }
   }
 
+  } else {
+
+   if (!wall[2] || box_present_right || !config.dry_run) {    
+      rel_x = bot_x_pos+RelPosX(RightOf(bot_dir));
+      rel_y = bot_y_pos+RelPosY(RightOf(bot_dir));
+      updateChildNodes(present_node, rel_x + rel_y * 10, RightOf(bot_dir));
+  
+      if(maze[rel_x][rel_y]==0)
+      {
+        next_move = 2;
+      } else if(maze[rel_x][rel_y]!=1){
+        next_move = 2;
+        decreaseMaze(maze[bot_x_pos][bot_y_pos]);
+      }else{
+        decreaseMaze(maze[bot_x_pos][bot_y_pos]);
+      }
+  }
+   
+  if (!wall[1] || !config.dry_run || box_present ) {  
+    rel_x = bot_x_pos+RelPosX(bot_dir);
+    rel_y = bot_y_pos+RelPosY(bot_dir);
+
+      if(config.dry_run)
+        if(wall[1] && box_present &&present_node != 43){
     
+            sound();
+            if(qr_present){
+              while(qr_present){
+                digitalWrite(QR_BOX_READ, HIGH);
+                changeDistanceForQr();
+                qr_present = digitalRead(QR_BOX_PIN);
+                digitalWrite(QR_BOX_READ, LOW);
+                motor->setState(NULL_STATE);
+              }
+            }
+          
+            while(box_present){
+              updateSensorData();
+              box_present = wall[1];
+            }
+    
+            
+           if(config.dry_run){
+              save_check_point = false;
+              config.box_coordinates[checkpoint++] = rel_x + rel_y * 10;
+              EEPROM_writeAnything(0,config);
+            }
+            
+        }
+    
+    
+    updateChildNodes(present_node, rel_x + rel_y * 10, bot_dir);
+
+    if (maze[rel_x][rel_y]==0) {
+      next_move = 1;
+    } else if(maze[rel_x][rel_y]!=1){
+      next_move = 1;
+      decreaseMaze(maze[bot_x_pos][bot_y_pos]);
+     }else{
+        decreaseMaze(maze[bot_x_pos][bot_y_pos]);
+     }
+    
+  }
+
+
+ if (!wall[0] || box_present_left || !config.dry_run) {
+    rel_x = bot_x_pos+RelPosX(LeftOf(bot_dir));
+    rel_y = bot_y_pos+RelPosY(LeftOf(bot_dir));
+    
+    updateChildNodes(present_node, rel_x + rel_y * 10, LeftOf(bot_dir));
+
+    if (maze[rel_x][rel_y]==0)
+    {  
+      next_move = 0;
+    } else if (maze[rel_x][rel_y]!=1 ){
+      next_move = 0;
+      decreaseMaze(maze[bot_x_pos][bot_y_pos]); 
+    }else{
+      decreaseMaze(maze[bot_x_pos][bot_y_pos]);
+
+    }
+  }
+  }
+
+
+//   if(box_present){
+//        sound();
+//        if(qr_present){
+//          while(qr_present){
+//            digitalWrite(QR_BOX_READ, HIGH);
+//            changeDistanceForQr();
+//            qr_present = digitalRead(QR_BOX_PIN);
+//            digitalWrite(QR_BOX_READ, LOW);
+//            motor->setState(NULL_STATE);
+//          }
+//        }
+//      
+//        while(box_present){
+//          updateSensorData();
+//          box_present = wall[1];
+//        }
+//
+//        if(config.dry_run){
+//          checkpoint += 1;
+//          config.box_coordinates[checkpoint] = next_node;
+//          EEPROM_writeAnything(0,config);
+//        }
+//         //write checkpoint if necessary checkpoint
+//        delay(200);
+//        return;
+//      }
+
+   
+   if(box_present){
+        sound();
+        if(qr_present){
+          while(qr_present){
+            digitalWrite(QR_BOX_READ, HIGH);
+            changeDistanceForQr();
+            qr_present = digitalRead(QR_BOX_PIN);
+            digitalWrite(QR_BOX_READ, LOW);
+            motor->setState(NULL_STATE);
+          }
+        }
+      
+        while(box_present){
+          updateSensorData();
+          box_present = wall[1];
+        }
+        save_check_point = true;
+   }
+
+
+
+
+    if(first_maze_completion && present_node == 43){
+    box_present = true;
+    qr_present = true;
+
+    if(bot_x_pos+RelPosX(LeftOf(bot_dir)) == 4 && bot_y_pos+RelPosY(LeftOf(bot_dir)) == 4){
+      next_move = 0;
+    }else if(bot_x_pos+RelPosX(bot_dir) == 4 && bot_y_pos+RelPosY(bot_dir) == 4){
+      next_move = 1;
+    }else if(bot_x_pos+RelPosX(RightOf(bot_dir)) == 4 && bot_y_pos+RelPosY(RightOf(bot_dir)) == 4){
+      next_move = 2;
+      }
+  }
+
+  
     switch (next_move) {
       case 0: // go left
-        delay(200);
+        delay(200);       
+        if(box_present_left){
+          box_present_left = false;
+          box_present = true;
+        }
         motor->rotateLeft(ROTATION_LEFT_STEPS);
         delay(200);
 //        checkBackSensor();
@@ -358,6 +541,11 @@ void loop(){
         
       case 2: // go right
         delay(200);
+
+        if(box_present_right){
+          box_present_right = false;
+          box_present = true;
+        }
         motor->rotateRight(ROTATION_RIGHT_STEPS);
         delay(200);
 //        checkBackSensor();
@@ -365,6 +553,26 @@ void loop(){
         break;
         
     }
+
+   if(box_present){
+        sound();
+        if(qr_present){
+          while(qr_present){
+            digitalWrite(QR_BOX_READ, HIGH);
+            changeDistanceForQr();
+            qr_present = digitalRead(QR_BOX_PIN);
+            digitalWrite(QR_BOX_READ, LOW);
+            motor->setState(NULL_STATE);
+          }
+        }
+      
+        while(box_present){
+          updateSensorData();
+          box_present = wall[1];
+        }
+        save_check_point = true;
+   }
+
     
     if (next_move != 4) { 
       
@@ -384,18 +592,15 @@ void loop(){
         }
      }
 
-     if(box_present){
-
-        digitalWrite(TONE_PIN, HIGH);
-        delay(50);
-        digitalWrite(TONE_PIN, LOW);
-
+   if(box_present){
+        sound();
         if(qr_present){
           while(qr_present){
             digitalWrite(QR_BOX_READ, HIGH);
             changeDistanceForQr();
             qr_present = digitalRead(QR_BOX_PIN);
             digitalWrite(QR_BOX_READ, LOW);
+            motor->setState(NULL_STATE);
           }
         }
       
@@ -403,15 +608,45 @@ void loop(){
           updateSensorData();
           box_present = wall[1];
         }
+        save_check_point = true;
+   }
 
+
+
+//     if(box_present){
+//      sound();
+//        if(qr_present){
+//          while(qr_present){
+//            digitalWrite(QR_BOX_READ, HIGH);
+//            changeDistanceForQr();
+//            qr_present = digitalRead(QR_BOX_PIN);
+//            digitalWrite(QR_BOX_READ, LOW);
+//            motor->setState(NULL_STATE);
+//          }
+//        }
+//      
+//        while(box_present){
+//          updateSensorData();
+//          box_present = wall[1];
+//        }
+//
+//        if(config.dry_run){
+//          checkpoint += 1;
+//          config.box_coordinates[checkpoint] = next_node;
+//          EEPROM_writeAnything(0,config);
+//        }
+//         //write checkpoint if necessary checkpoint
+//        delay(200);
+//      }
+
+
+      if(save_check_point){
         if(config.dry_run){
-          checkpoint += 1;
-          config.box_coordinates[checkpoint] = next_node;
+          save_check_point = false;
+          config.box_coordinates[checkpoint++] = next_node;
           EEPROM_writeAnything(0,config);
         }
-         //write checkpoint if necessary checkpoint
-        delay(200);
-        return;
+        delay(100);
       }
       
       motor->updatePWM(0);
@@ -421,9 +656,10 @@ void loop(){
     }
 
     if(wall[0] && wall[1] && wall[2]){
+      
         if(sensor_values[1] < QR_BOX_DIST){
           while(sensor_values[1] <= QR_BOX_DIST){
-             motor->setPWM(60);
+             motor->setPWM(CAL_SPEED);
              motor->moveBackward(500);
              updateSensorData();
           }
@@ -434,65 +670,77 @@ void loop(){
       delay(1000);
       box_present_right = digitalRead(BOX_PIN);
       if(box_present_right){
-        box_present = true;
+
+        sound();  
         servo.write(90);
         
         while(sensor_values[1] >= 1090){
-          motor->setPWM(60); 
+          motor->setPWM(CAL_SPEED); 
           motor->moveForward(500);
           updateSensorData();
         }
         motor->stopMoving();
+        motor->setState(NULL_STATE);
         return;
       }
 
       servo.write(10);
       delay(1000);
       box_present_left = digitalRead(BOX_PIN);
+      
       if(box_present_left){
-        box_present = true;
+
         servo.write(90);
+        sound();
 
         while(sensor_values[1] >= 1090){
-            motor->setPWM(60); 
+            motor->setPWM(CAL_SPEED); 
             motor->moveForward(500);
             updateSensorData();
         }
         motor->stopMoving();
+        motor->setState(NULL_STATE);
+
         return;
       }
 
      while(sensor_values[1] >= 1090){
-          motor->setPWM(60); 
+          motor->setPWM(CAL_SPEED); 
           motor->moveForward(500);
           updateSensorData();
       }
       motor->stopMoving();
-
-      servo.write(80); 
+      
+      motor->setState(NULL_STATE);
+      servo.write(90); 
     }
     
     maze[bot_x_pos][bot_y_pos] = 1;   //visited the dead end
     
     if(!first_maze_completion){
       is_first_maze_completed = isFirstMazeCompleted();
-        
       if(is_first_maze_completed) {
+        first_maze_completion = true;
         motor->stopMoving();
+        motor->setState(NULL_STATE);
         writeData();
         return;
       }
     }
 
     if(first_maze_completion){
+      
       is_maze_completed = isMazeCompleted();
-
+      
       if(is_maze_completed){
         motor->stopMoving();
-        writeData();
-        digitalWrite(TONE_PIN, HIGH);
+        sound();
         delay(50);
-        digitalWrite(TONE_PIN, LOW);
+        sound();
+        sound();
+        sound();
+        config.dry_run = false;
+        writeData();
         return;
       }
       
@@ -579,19 +827,18 @@ void updateChildNodes(int pre, int nxt, int dir){
 
 void changeDistanceForQr(){
   while(digitalRead(QR_BOX_PIN)){
-    
-      if(sensor_values[1] < QR_BOX_DIST){
-        while(sensor_values[1] <= QR_BOX_DIST){
-           motor->setPWM(60);
+      if(sensor_values[1] < 2000){
+//        while(sensor_values[1] <= 2000){
+           motor->setPWM(CAL_SPEED);
            motor->moveBackward(500);
            updateSensorData();
-        }
+//        }
       }
       motor->stopMoving();
   } 
 
   while(sensor_values[1] >= 1090){
-      motor->setPWM(60); 
+      motor->setPWM(CAL_SPEED); 
       motor->moveForward(500);
       updateSensorData();
   }
@@ -606,12 +853,6 @@ void updateSensorData(){
   for(uint8_t i = 0; i < 3; i++){
     sensor_values[i] = (sonar[i]->ping()  / 57.0) * 100;
   }
-
-  back_sensor = sonar1->ping_cm();
-
-  if(back_sensor == 0){
-    back_sensor = 600;
-  }
   
   for(uint8_t i = 0; i < 3; i ++){
     sensor_values[i] = sensor_values[i]  == 0 ? 60000 : sensor_values[i];
@@ -625,7 +866,6 @@ void setupPID(){
   pid->SetMode(AUTOMATIC);
   pid->SetSampleTime(5);
   pid->SetOutputLimits(0-MAX_OUTPUT_LIMITS, MAX_OUTPUT_LIMITS);
-
 }
 
 void initialize_map(){
@@ -724,14 +964,14 @@ void checkDistance(){
   if(sensor_values[1] < 2000){
       if(sensor_values[1] < 1090){
         while(sensor_values[1] <= 1090){
-           motor->setPWM(60);
+           motor->setPWM(CAL_SPEED);
            motor->moveBackward(500);
            updateSensorData();
         }
 //        motor->stopMovingBackSlow();
       }else if(sensor_values[1] > 1090){
         while(sensor_values[1] >= 1090){
-            motor->setPWM(60); 
+            motor->setPWM(CAL_SPEED); 
             motor->moveForward(500);
             updateSensorData();
         }
@@ -743,29 +983,6 @@ void checkDistance(){
 
 }
 
-
-void checkBackSensor(){
-  
-    if(back_sensor < 20){
-       if(back_sensor > 8){
-        while(back_sensor >= 8){
-           motor->setPWM(60);
-           motor->moveBackward(500);
-           back_sensor = sonar1->ping_cm();
-           back_sensor == 0 ? back_sensor = 600 : back_sensor;
-        }
-        motor->stopMovingBackSlow();
-      }else if(sensor_values[1] < 8){
-        while(sensor_values[1] <= 8){
-            motor->setPWM(60); 
-            motor->moveForward(500);
-            back_sensor = sonar1->ping_cm();
-            back_sensor == 0 ? back_sensor = 600 : back_sensor;
-        }
-        motor->stopMoving();
-      }
-    }
-}
 
 
 void solveMaze(int checkpoints){
@@ -800,12 +1017,28 @@ void solveMaze(int checkpoints){
 }
 
 
+void sound(){
+    digitalWrite(TONE_PIN, HIGH);
+    delay(50);
+    digitalWrite(TONE_PIN, LOW);
+}
+
 
 void configureMazePath(int *solved_path){
   int count = 0;
-  for(int i = 0; i < 9; i++){
-    for(int j = 0;  j < 9; j++){
-      maze[i][j] = 1;
+
+  if(!is_first_maze_completed){
+    for(int i = 0; i < 9; i++){
+      for(int j = 0;  j < 9; j++){
+        maze[i][j] = 1;
+      }
+    }
+  }
+  else if(is_first_maze_completed){
+    for(int i = 0; i < 4; i++){
+      for(int j = 0; j < 9; j++){
+        maze[i][j] = 1;
+      }
     }
   }
 
